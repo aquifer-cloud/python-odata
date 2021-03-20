@@ -58,16 +58,18 @@ class Query(object):
     This class should not be instantiated directly, but from a
     :py:class:`~odata.service.ODataService` object.
     """
-    def __init__(self, entitycls, connection=None, options=None):
+    def __init__(self, entitycls, url=None, connection=None, options=None):
         self.entity = entitycls
         self.options = options or dict()
         self.connection = connection
+        self.url = url
+        self.singleton = False
 
-    def __iter__(self):
-        url = self._get_url()
+    async def __aiter__(self):
+        url = self.url or self._get_url()
         options = self._get_options()
         while True:
-            data = self.connection.execute_get(url, options)
+            data = await self.connection.execute_get(url, options)
             if 'value' in data:
                 value = data.get('value', [])
                 for row in value:
@@ -78,7 +80,7 @@ class Query(object):
                     options = {}  # we get all options in the nextLink url
                 else:
                     break
-            elif self.entity.__odata_singleton__:
+            elif self.singleton or self.entity.__odata_singleton__:
                 yield self._create_model(data)
                 break
             else:
@@ -293,7 +295,19 @@ class Query(object):
             raise exc.MultipleResultsFound()
         return data[0]
 
-    def get(self, *pk, **composite_keys):
+    async def by_pk(self, pk):
+        self.url = self._get_url() + '/' + pk
+        self.singleton = True
+        data = []
+        async for item in self:
+            data.append(item)
+
+        if len(data) > 0:
+            return data[0]
+
+        raise exc.NoResultsFound()
+
+    async def get(self, *pk, **composite_keys):
         """
         Return a Entity with the given primary key
 
@@ -317,7 +331,9 @@ class Query(object):
                 tempfilters.append(prop == composite_keys[prop.name])
 
         self.options['$filter'] = tempfilters
-        data = list(iter(self))
+        data = []
+        async for item in self:
+            data.append(item)
 
         self.options['$filter'] = oldfilters
         if len(data) > 0:

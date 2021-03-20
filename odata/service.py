@@ -138,14 +138,14 @@ class ODataService(object):
         :type Function: Function
         """
 
-        if reflect_entities:
-            _, self.entities, self.types = self.metadata.get_entity_sets(base=self.Entity)
-
         self.Entity.__odata_url_base__ = url
         self.Entity.__odata_service__ = self
 
     def __repr__(self):
         return u'<ODataService at {0}>'.format(self.url)
+
+    async def reflect(self):
+        _, self.entities, self.types = await self.metadata.get_entity_sets(base=self.Entity)
 
     def create_context(self, auth=None, session=None):
         """
@@ -170,14 +170,14 @@ class ODataService(object):
         """Returns boolean indicating entity's status"""
         return self.default_context.is_entity_saved(entity)
 
-    def query(self, entitycls):
+    def query(self, entitycls, url=None):
         """
         Start a new query for given entity class
 
         :param entitycls: Entity to query
         :return: Query object
         """
-        return self.default_context.query(entitycls)
+        return self.default_context.query(entitycls, url=url)
 
     def delete(self, entity):
         """

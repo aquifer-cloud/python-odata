@@ -56,7 +56,7 @@ class MetaData(object):
             return False, typename
 
     def _get_entities_from_types(self, all_types):
-        return [entity for entity in all_types.values() if issubclass(entity, EntityBase)]
+        return [entity for entity in all_types.values() if not isinstance(entity, dict) and issubclass(entity, EntityBase)]
 
     def _set_object_relationships(self, all_types):
         entities = self._get_entities_from_types(all_types)
@@ -124,7 +124,7 @@ class MetaData(object):
 
                     property_type = all_types.get(prop['type'])
 
-                    if property_type and issubclass(property_type, EnumType):
+                    if property_type and  not isinstance(property_type, dict) and issubclass(property_type, EnumType):
                         property_instance = EnumTypeProperty(prop_name, enum_class=property_type)
                         property_instance.is_computed_value = prop['is_computed_value']
                     else:
@@ -209,8 +209,8 @@ class MetaData(object):
             else:
                 self.service.functions[function['name']] = function_class()
 
-    def get_entity_sets(self, base=None):
-        document = self.load_document()
+    async def get_entity_sets(self, base=None):
+        document = await self.load_document()
         schemas, entity_sets, actions, functions = self.parse_document(document)
 
         base_class = base or declarative_base()
@@ -232,6 +232,10 @@ class MetaData(object):
                 created_enum = EnumType(enum_type['name'], names=names)
                 all_types[enum_type['fully_qualified_name']] = created_enum
 
+            for complex_type in schema['complex_types']:
+                if complex_type['fully_qualified_name'] not in all_types:
+                    all_types[complex_type['fully_qualified_name']] = complex_type
+
         self._create_entities(all_types, base_class, schemas)
 
         sets = {}
@@ -249,10 +253,10 @@ class MetaData(object):
         self.log.info('Loaded {0} entity sets, total {1} types'.format(len(sets), len(all_types)))
         return base_class, sets, all_types
 
-    def load_document(self):
+    async def load_document(self):
         self.log.info('Loading metadata document: {0}'.format(self.url))
-        response = self.connection._do_get(self.url)
-        return ET.fromstring(response.content)
+        response = await self.connection._do_get(self.url)
+        return ET.fromstring(await response.text())
 
     def _parse_action(self, xmlq, action_element, schema_name):
         action = {
@@ -408,6 +412,43 @@ class MetaData(object):
             })
         return enum
 
+    def _parse_complex_type(self, xmlq, complex_type_element, schema_name):
+        complex_type_name = complex_type_element.attrib['Name']
+        complex_type = {
+            'name': complex_type_name,
+            'fully_qualified_name': '.'.join([schema_name, complex_type_name]),
+            'properties': []
+        }
+
+        base_type = complex_type_element.attrib.get('BaseType')
+        if base_type:
+            complex_type['base_type'] = base_type
+
+        is_open_type = complex_type_element.attrib.get('OpenType')
+        if is_open_type:
+            complex_type['is_open_type'] = is_open_type == 'true'
+
+        for complex_type_property in xmlq(complex_type_element, 'edm:Property'):
+            p_name = complex_type_property.attrib['Name']
+            p_type = complex_type_property.attrib['Type']
+
+            is_collection, p_type = self._type_is_collection(p_type)
+            is_computed_value = False
+
+            for annotation in xmlq(complex_type_property, 'edm:Annotation'):
+                annotation_term = annotation.attrib.get('Term', '')
+                annotation_bool = annotation.attrib.get('Bool') == 'true'
+                if annotation_term == self._annotation_term_computed:
+                    is_computed_value = annotation_bool
+
+            complex_type['properties'].append({
+                'name': p_name,
+                'type': p_type,
+                'is_collection': is_collection,
+                'is_computed_value': is_computed_value,
+            })
+        return complex_type
+
     def parse_document(self, doc):
         schemas = []
         container_sets = {}
@@ -436,6 +477,10 @@ class MetaData(object):
             for enum_type in xmlq(schema, 'edm:EnumType'):
                 enum = self._parse_enumtype(xmlq, enum_type, schema_name)
                 schema_dict['enum_types'].append(enum)
+
+            for complex_type in xmlq(schema, 'edm:ComplexType'):
+                complex_t = self._parse_complex_type(xmlq, complex_type, schema_name)
+                schema_dict['complex_types'].append(complex_t)
 
             for entity_type in xmlq(schema, 'edm:EntityType'):
                 entity = self._parse_entity(xmlq, entity_type, schema_name, schema_alias)

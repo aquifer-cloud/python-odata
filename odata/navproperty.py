@@ -82,6 +82,38 @@ class NavigationProperty(object):
             cache['single'] = value
         instance.__odata__.set_property_dirty(self)
 
+    async def fetch(self, service, instance, path):
+        """
+        :type instance: odata.entity.EntityBase
+        """
+        if instance is None:
+            return self
+
+        es = instance.__odata__
+        connection = service.default_context.connection
+        parent_url = es.instance_url
+        new_object = parent_url is None
+        cache = self._get_parent_cache(instance)
+
+        url = service.url + '/'.join(path)
+
+        if self.is_collection:
+            if 'collection' not in cache:
+                raw_data = await connection.execute_get(url)
+                if raw_data:
+                    cache['collection'] = self.instances_from_data(raw_data['value'])
+                else:
+                    cache['collection'] = []
+            return cache['collection']
+        else:
+            if 'single' not in cache:
+                raw_data = await connection.execute_get(url)
+                if raw_data:
+                    cache['single'] = self.instances_from_data(raw_data)
+                else:
+                    cache['single'] = None
+            return cache['single']
+
     def __get__(self, instance, owner):
         """
         :type instance: odata.entity.EntityBase
